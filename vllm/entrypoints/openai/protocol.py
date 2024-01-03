@@ -74,6 +74,31 @@ class ChatCompletionRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
 
+class SchedulePrefixRequest(BaseModel):
+    model: str
+    messages: Optional[List[Dict[str, str]]]
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 1.0
+    n: Optional[int] = 1
+    max_tokens: Optional[int] = 16
+    stop: Optional[Union[str, List[str]]] = Field(default_factory=list)
+    stream: Optional[bool] = False
+    presence_penalty: Optional[float] = 0.0
+    frequency_penalty: Optional[float] = 0.0
+    logit_bias: Optional[Dict[str, float]] = None
+    user: Optional[str] = None
+    # Additional parameters supported by vLLM
+    best_of: Optional[int] = None
+    top_k: Optional[int] = -1
+    ignore_eos: Optional[bool] = False
+    use_beam_search: Optional[bool] = False
+    stop_token_ids: Optional[List[int]] = Field(default_factory=list)
+    skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
+    prefix_pos: Optional[int] = None
+    messages_list: List[List[Dict[str, str]]]
+    sub_message: List[List[Dict[str, str]]]
+
 
 class CompletionRequest(BaseModel):
     model: str
@@ -125,6 +150,8 @@ class CompletionResponse(BaseModel):
     choices: List[CompletionResponseChoice]
     usage: UsageInfo
 
+class SchedulePrefixResponse(BaseModel):
+    outputs: List[CompletionResponse]
 
 class CompletionResponseStreamChoice(BaseModel):
     index: int

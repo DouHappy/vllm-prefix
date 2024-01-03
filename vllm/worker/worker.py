@@ -304,6 +304,9 @@ class Worker:
         ]
         block_tables = generation_block_tables if prefix_block_tables == [] else prefix_block_tables
         # print("block_tables", block_tables)
+        # print(f"-------\nmax_num_blocks_per_seq: {max_num_blocks_per_seq} {[len(block_table) for block_table in block_tables]}\n----")
+        max_num_blocks_per_seq = max([len(block_table) for block_table in block_tables])
+        
         padded_block_tables = [
             _pad_to_max(block_table, max_num_blocks_per_seq, pad=0)
             for block_table in block_tables

@@ -30,6 +30,8 @@ from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.transformers_utils.tokenizer import get_tokenizer
 from vllm.utils import random_uuid
+from .prefix_group import PrefixGroup
+from vllm.entrypoints.openai.protocol import SchedulePrefixRequest, SchedulePrefixResponse
 
 try:
     import fastchat
@@ -186,6 +188,140 @@ def create_logprobs(token_ids: List[int],
     return logprobs
 
 
+@app.post("/delete_prefix/")
+async def delete_prefix(request: ChatCompletionRequest) -> Response:
+    logger.info(f"Received prefix deletion request: {request}")
+    prompt = await get_gen_prompt(request)
+    prefix_tokens = tokenizer(prompt).input_ids
+    logger.info(f"prefix tokens going to delete: {prefix_tokens}")
+    if engine.delete_prefix(prefix_tokens) != None:
+        JSONResponse({"response": "ok"})
+    else:
+        JSONResponse({"response": "delete error"})
+
+@app.post("/schedule_prefix")
+async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
+    logger.info(f"Received schedule prefix request: {request}")
+    sub_messages = request.sub_message
+    messages = request.messages_list
+    prefix_groups:List[PrefixGroup] = []
+    # count total number of request for each prefix
+    messages_dict:Dict[str,List[Tuple[int, List]]] = {}
+    for ind, (sub_message, message) in enumerate(zip(sub_messages, messages)):
+        str_sub_message = str(sub_message)
+        if str_sub_message in messages_dict:
+            messages_dict[str_sub_message].append((ind, message))
+        else:
+            messages_dict[str_sub_message] = [(ind, message)]
+
+    # logger.info(f"messages_dict: {messages_dict}")
+    response: SchedulePrefixResponse = SchedulePrefixResponse(outputs=[])
+    response.outputs = [None] * len(messages)
+    # init prefix group
+    for str_sub_message, messages in messages_dict.items():
+        sub_message = eval(str_sub_message)
+        request.messages = sub_message
+        prefix = await get_gen_prompt(request)
+        prefix_tokens = tokenizer(prefix).input_ids
+        prompts_tokens_list = []
+        query_ids = []
+        messages_list = []
+        for ind, message in messages:
+            request.messages = message
+            query_ids.append(ind)
+            messages_list.append(message)
+            message_prompt = await get_gen_prompt(request)
+            prompt_tokens = tokenizer(message_prompt).input_ids
+            prompts_tokens_list.append(prompt_tokens)
+        prefix_groups.append(PrefixGroup(
+            sub_message=sub_message,
+            messages_list=messages_list,
+            block_size=engine.engine.cache_config.block_size,
+            prefix_tokens=prefix_tokens,
+            prompts_tokens_list=prompts_tokens_list,
+            query_ids=query_ids,
+        ))
+
+    # logger.info(f"init prefix_group: {prefix_groups}")
+    # sort by needed block number
+    sorted(prefix_groups, key=lambda x:x.get_block_num(), reverse=True)
+
+    while prefix_groups:
+        query_list:List[PrefixGroup] = []
+        cur_free_block_num = engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()
+        for group in prefix_groups:
+            if group.can_alloc(cur_free_block_num):
+                query_list.append(group)
+                cur_free_block_num -= group.block_num
+        
+        if query_list == []:
+            break
+        # warm up batch
+        var_dict = vars(request)
+        var_dict.pop('messages_list')
+        var_dict.pop('sub_message')
+        temp_request = ChatCompletionRequest(**var_dict)
+        tasks = []
+        for query in query_list:
+            temp_request.max_tokens = 1
+            temp_request.messages = query.sub_message
+            temp_request.prefix_pos = query.prefix_pos
+            task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
+            tasks.append(task)
+        results = await asyncio.gather(*tasks)
+
+        for result in results:
+            logger.info(f"warmup over: {result}")
+
+        tasks = []
+        # query_batch
+        
+        query_ids:List[int] = []
+        
+        temp_request = ChatCompletionRequest(**var_dict)
+        for query in query_list:
+            for ind, message in zip(query.query_ids, query.messages_list):
+                temp_request.messages = message
+                temp_request.prefix_pos = query.prefix_pos
+                task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
+                tasks.append(task)
+                query_ids.append(ind)
+
+        # logger.info(f"query batch query_ids: {query_ids}")
+        results = await asyncio.gather(*tasks)
+        # handle output
+        for result, ind in zip(results, query_ids):
+            response.outputs[ind] = result
+            # logger.info(f"gather query {ind}'s response")
+            
+        # delete_prefix
+        for query in query_list:
+            prefix_groups.remove(query)
+            engine.delete_prefix(query.prefix_tokens)
+            # logger.info(f"delete prefix: {query.prefix_tokens}")
+    
+    # handle unable to warmup-batched query
+    tasks = []
+    query_ids = []
+    for query in prefix_groups:
+        var_dict = vars(request)
+        var_dict.pop('messages_list')
+        var_dict.pop('sub_message')
+        temp_request = ChatCompletionRequest(**var_dict)
+        for ind, message in zip(query.query_ids, query.messages_list):
+            temp_request.messages = message
+            temp_request.prefix_pos = query.prefix_pos
+            task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
+            tasks.append(task)
+            query_ids.append(ind)
+    results = await asyncio.gather(*tasks)
+    # logger.info(f"last batch query_ids: {query_ids}")
+    for ind, result in zip(query_ids, results):
+        response.outputs[ind] = result
+    # return output
+    return response
+
+
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest,
                                  raw_request: Request):
@@ -213,6 +349,27 @@ async def create_chat_completion(request: ChatCompletionRequest,
     token_ids, error_check_ret = await check_length(request, prompt=prompt)
     if error_check_ret is not None:
         return error_check_ret
+    
+    prefix_pos = request.prefix_pos
+    if prefix_pos == None:
+        if request.sub_message is not None:
+            sub_request = deepcopy(request)
+            sub_request.messages = sub_request.sub_message
+            substr = await get_gen_prompt(sub_request)
+            substr_ids, error_check_ret = await check_length(request, prompt=substr)
+            if error_check_ret is not None:
+                return error_check_ret
+            for i in range(0, min(len(substr_ids), len(token_ids))):
+                if substr_ids[i] != token_ids[i]:
+                    prefix_pos = i
+                    break
+                if i == len(substr_ids) - 1:
+                    prefix_pos = i + 1
+
+            if prefix_pos == 0:
+                logger.info(f"prefix is too short to fill one physics block. So will not be cached")
+                prefix_pos = None
+    
 
     model_name = request.model
     request_id = f"cmpl-{random_uuid()}"
