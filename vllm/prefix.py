@@ -1,3 +1,4 @@
+from sys import prefix
 from typing import Dict, List, Optional, Union
 
 # Define the prefix class, which is a collection of prefix (a sequence of tokens).
@@ -93,3 +94,18 @@ class PrefixPool:
         prefix_id = self.prefixes_hash[prefix_hash]
         return self.prefixes[prefix_id]
 
+    def delete_prefix(self, prefix_hash: int) -> Optional[int]:
+        if prefix_hash not in self.prefixes_hash:
+            return None
+        
+        prefix_id = self.prefixes_hash[prefix_hash]
+        # physics block will be deleted in block_manager outside this function
+        # del prefix
+        self.prefixes_hash.pop(prefix_hash)
+        for key, value in self.prefixes_hash.items():
+            if value > prefix_id:
+                self.prefixes_hash[key] -= 1
+
+        del self.prefixes[prefix_id]
+        
+        return prefix_id

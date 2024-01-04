@@ -234,6 +234,23 @@ class LLMEngine:
                      log_stats=not engine_args.disable_log_stats)
         return engine
 
+    def delete_prefix(self, prefix_tokens:List[int]) -> int:
+        '''
+        Input:
+            prefix: the token_ids of prefix
+        Output:
+            deleted_id: the prefix_id of deleted prefix if successfully deleted
+                        or None
+        '''
+        block_size = self.cache_config.block_size
+        prefix_pos = len(prefix_tokens) // block_size * block_size
+        truncated_prefix_token_ids = prefix_tokens[:prefix_pos]
+        prefix_hash = hash(tuple(truncated_prefix_token_ids))
+        prefix = self.scheduler.prefix_pool.fixed_search(prefix_hash)
+        self.scheduler.block_manager.free_prefix(prefix)
+        deleted_id = self.scheduler.prefix_pool.delete_prefix(prefix_hash)
+        return deleted_id
+
     def add_request(
         self,
         request_id: str,

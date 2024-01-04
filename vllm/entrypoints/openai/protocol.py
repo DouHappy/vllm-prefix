@@ -73,6 +73,8 @@ class ChatCompletionRequest(BaseModel):
     stop_token_ids: Optional[List[int]] = Field(default_factory=list)
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
+    prefix_pos: Optional[int]
+    sub_message: Optional[Union[str, List[Dict[str, str]]]]
 
 class SchedulePrefixRequest(BaseModel):
     model: str
@@ -95,9 +97,9 @@ class SchedulePrefixRequest(BaseModel):
     stop_token_ids: Optional[List[int]] = Field(default_factory=list)
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
-    prefix_pos: Optional[int] = None
-    messages_list: List[List[Dict[str, str]]]
-    sub_message: List[List[Dict[str, str]]]
+    message_and_submessage: List[List[List[Dict[str, str]]]]
+    # messages_list: List[List[Dict[str, str]]]
+    # sub_message: List[List[Dict[str, str]]]
 
 
 class CompletionRequest(BaseModel):

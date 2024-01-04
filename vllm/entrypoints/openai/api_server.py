@@ -7,6 +7,7 @@ import json
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
+from copy import deepcopy
 
 import fastapi
 import uvicorn
@@ -202,21 +203,21 @@ async def delete_prefix(request: ChatCompletionRequest) -> Response:
 @app.post("/schedule_prefix")
 async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
     logger.info(f"Received schedule prefix request: {request}")
-    sub_messages = request.sub_message
-    messages = request.messages_list
+    # sub_messages = request.sub_message
+    # messages = request.messages_list
     prefix_groups:List[PrefixGroup] = []
     # count total number of request for each prefix
     messages_dict:Dict[str,List[Tuple[int, List]]] = {}
-    for ind, (sub_message, message) in enumerate(zip(sub_messages, messages)):
+    for ind, (message, sub_message) in enumerate(request.message_and_submessage):
         str_sub_message = str(sub_message)
         if str_sub_message in messages_dict:
             messages_dict[str_sub_message].append((ind, message))
         else:
             messages_dict[str_sub_message] = [(ind, message)]
 
-    # logger.info(f"messages_dict: {messages_dict}")
+    logger.info(f"messages_dict: {messages_dict}")
     response: SchedulePrefixResponse = SchedulePrefixResponse(outputs=[])
-    response.outputs = [None] * len(messages)
+    response.outputs = [None] * len(request.message_and_submessage)
     # init prefix group
     for str_sub_message, messages in messages_dict.items():
         sub_message = eval(str_sub_message)
@@ -242,7 +243,7 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
             query_ids=query_ids,
         ))
 
-    # logger.info(f"init prefix_group: {prefix_groups}")
+    logger.info(f"init prefix_group: {prefix_groups}")
     # sort by needed block number
     sorted(prefix_groups, key=lambda x:x.get_block_num(), reverse=True)
 
@@ -258,11 +259,11 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
             break
         # warm up batch
         var_dict = vars(request)
-        var_dict.pop('messages_list')
-        var_dict.pop('sub_message')
-        temp_request = ChatCompletionRequest(**var_dict)
+        var_dict.pop('message_and_submessage')
+        request_temp = ChatCompletionRequest(**var_dict)
         tasks = []
         for query in query_list:
+            temp_request = deepcopy(request_temp)
             temp_request.max_tokens = 1
             temp_request.messages = query.sub_message
             temp_request.prefix_pos = query.prefix_pos
@@ -273,52 +274,56 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
         for result in results:
             logger.info(f"warmup over: {result}")
 
-        tasks = []
+
         # query_batch
-        
+        tasks = []
         query_ids:List[int] = []
         
-        temp_request = ChatCompletionRequest(**var_dict)
+        request_temp = ChatCompletionRequest(**var_dict)
         for query in query_list:
             for ind, message in zip(query.query_ids, query.messages_list):
+                temp_request = deepcopy(request_temp)
                 temp_request.messages = message
                 temp_request.prefix_pos = query.prefix_pos
+                logger.info(f"new request: {temp_request}")
                 task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
                 tasks.append(task)
                 query_ids.append(ind)
 
-        # logger.info(f"query batch query_ids: {query_ids}")
+        logger.info(f"query batch query_ids: {query_ids}")
         results = await asyncio.gather(*tasks)
         # handle output
         for result, ind in zip(results, query_ids):
             response.outputs[ind] = result
-            # logger.info(f"gather query {ind}'s response")
+            logger.info(f"gather query {ind}'s response {result}")
             
         # delete_prefix
         for query in query_list:
             prefix_groups.remove(query)
             engine.delete_prefix(query.prefix_tokens)
-            # logger.info(f"delete prefix: {query.prefix_tokens}")
+            logger.info(f"delete prefix: {query.prefix_tokens}")
     
     # handle unable to warmup-batched query
-    tasks = []
-    query_ids = []
-    for query in prefix_groups:
-        var_dict = vars(request)
-        var_dict.pop('messages_list')
-        var_dict.pop('sub_message')
-        temp_request = ChatCompletionRequest(**var_dict)
-        for ind, message in zip(query.query_ids, query.messages_list):
-            temp_request.messages = message
-            temp_request.prefix_pos = query.prefix_pos
-            task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
-            tasks.append(task)
-            query_ids.append(ind)
-    results = await asyncio.gather(*tasks)
-    # logger.info(f"last batch query_ids: {query_ids}")
-    for ind, result in zip(query_ids, results):
-        response.outputs[ind] = result
-    # return output
+            
+    if prefix_groups:
+        tasks = []
+        query_ids = []
+        for query in prefix_groups:
+            var_dict = vars(request)
+            var_dict.pop('message_and_submessage')
+            request_temp = ChatCompletionRequest(**var_dict)
+            for ind, message in zip(query.query_ids, query.messages_list):
+                temp_request = deepcopy(request_temp)
+                temp_request.messages = message
+                temp_request.prefix_pos = query.prefix_pos
+                task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
+                tasks.append(task)
+                query_ids.append(ind)
+        results = await asyncio.gather(*tasks)
+        logger.info(f"last batch query_ids: {query_ids}")
+        for ind, result in zip(query_ids, results):
+            response.outputs[ind] = result
+        # return output
     return response
 
 
@@ -373,6 +378,7 @@ async def create_chat_completion(request: ChatCompletionRequest,
 
     model_name = request.model
     request_id = f"cmpl-{random_uuid()}"
+    logger.info(f'request_id {request_id}')
     created_time = int(time.monotonic())
     try:
         spaces_between_special_tokens = request.spaces_between_special_tokens
@@ -395,7 +401,8 @@ async def create_chat_completion(request: ChatCompletionRequest,
     except ValueError as e:
         return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-    result_generator = engine.generate(prompt, sampling_params, request_id,
+    logger.info(f'request_id {request_id}')
+    result_generator = engine.generate(prompt, prefix_pos, sampling_params, request_id,
                                        token_ids)
 
     def create_stream_response_json(
@@ -460,6 +467,7 @@ async def create_chat_completion(request: ChatCompletionRequest,
         return StreamingResponse(completion_stream_generator(),
                                  media_type="text/event-stream")
 
+    logger.info(f'request_id {request_id}')
     # Non-streaming response
     final_res: RequestOutput = None
     async for res in result_generator:

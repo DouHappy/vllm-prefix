@@ -26,7 +26,7 @@ class PrefixGroup:
                 break
         self.prefix_pos = max_equal_len // block_size * block_size
         self.prefix_tokens = self.prefix_tokens[:self.prefix_pos]
-        if self.prefix_pos > 0:
+        if self.prefix_pos <= 0:
             self.prefix_pos = None
 
     def dict(self)->Dict:
@@ -53,6 +53,7 @@ class PrefixGroup:
         res_list.append(f'prompts_tokens_list {self.prompts_tokens_list}')
         res_list.append(f'block_size {self.block_size}')
         res_list.append(f'query_ids {self.query_ids}')
+        res_list.append(f'prefix pos {self.prefix_pos}')
         return '\n'.join(res_list)
         
 

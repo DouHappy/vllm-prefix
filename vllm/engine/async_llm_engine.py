@@ -296,6 +296,7 @@ class AsyncLLMEngine:
 
     def _init_engine(self, *args,
                      **kwargs) -> Union[_AsyncLLMEngine, "ray.ObjectRef"]:
+        print(f"engine_use_ray : {self.engine_use_ray}")
         if not self.engine_use_ray:
             engine_class = self._engine_class
         elif self.worker_use_ray:
@@ -498,3 +499,20 @@ class AsyncLLMEngine:
                      max_log_len=engine_args.max_log_len,
                      start_engine_loop=start_engine_loop)
         return engine
+
+    def delete_prefix(self, prefix_tokens:List[int]) -> int:
+        '''
+        Input:
+            prefix: the token_ids of prefix
+        Output:
+            deleted_id: the prefix_id of deleted prefix if successfully deleted
+                        or None
+        '''
+        block_size = self.engine.cache_config.block_size
+        prefix_pos = len(prefix_tokens) // block_size * block_size
+        truncated_prefix_token_ids = prefix_tokens[:prefix_pos]
+        prefix_hash = hash(tuple(truncated_prefix_token_ids))
+        prefix = self.engine.scheduler.prefix_pool.fixed_search(prefix_hash)
+        self.engine.scheduler.block_manager.free_prefix(prefix)
+        deleted_id = self.engine.scheduler.prefix_pool.delete_prefix(prefix_hash)
+        return deleted_id

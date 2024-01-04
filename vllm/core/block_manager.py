@@ -347,6 +347,12 @@ class BlockSpaceManager:
             else:
                 self.cpu_allocator.free(block)
 
+    def free_prefix(self, prefix:Prefix) -> None:
+        if prefix == None:
+            return
+        self._free_block_table(prefix.block_table)
+        
+
     def free(self, seq: Sequence) -> None:
         if seq.seq_id not in self.block_tables:
             # Already freed or haven't been scheduled yet.

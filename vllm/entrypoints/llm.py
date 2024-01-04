@@ -190,3 +190,6 @@ class LLM:
         # its previous requests.
         outputs = sorted(outputs, key=lambda x: int(x.request_id))
         return outputs
+
+    def delete_prefix(self, prefix_tokens:List[int]) -> int:
+        return self.llm_engine.delete_prefix(prefix_tokens)
