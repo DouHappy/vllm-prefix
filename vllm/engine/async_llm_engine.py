@@ -511,8 +511,11 @@ class AsyncLLMEngine:
         block_size = self.engine.cache_config.block_size
         prefix_pos = len(prefix_tokens) // block_size * block_size
         truncated_prefix_token_ids = prefix_tokens[:prefix_pos]
-        prefix_hash = hash(tuple(truncated_prefix_token_ids))
-        prefix = self.engine.scheduler.prefix_pool.fixed_search(prefix_hash)
+        # prefix_hash = hash(tuple(truncated_prefix_token_ids))
+        # prefix = self.engine.scheduler.prefix_pool.fixed_search(prefix_hash)
+        prefix = self.engine.scheduler.prefix_trie.match(truncated_prefix_token_ids)
         self.engine.scheduler.block_manager.free_prefix(prefix)
-        deleted_id = self.engine.scheduler.prefix_pool.delete_prefix(prefix_hash)
+        # deleted_id = self.engine.scheduler.prefix_pool.delete_prefix(prefix_hash)
+        deleted_id = self.engine.scheduler.prefix_trie.delete_prefix(truncated_prefix_token_ids)
+        
         return deleted_id

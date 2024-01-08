@@ -8,7 +8,7 @@ from vllm.core.policy import PolicyFactory
 from vllm.logger import init_logger
 from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
                            SequenceGroupMetadata, SequenceStatus)
-from vllm.prefix import Prefix, PrefixPool
+from vllm.prefix import Prefix, PrefixPool, PrefixTrie
 
 logger = init_logger(__name__)
 
@@ -76,7 +76,8 @@ class Scheduler:
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window)
         
-        self.prefix_pool = PrefixPool(self.cache_config.block_size)
+        # self.prefix_pool = PrefixPool(self.cache_config.block_size)
+        self.prefix_trie = PrefixTrie(self.cache_config.block_size)
 
         # TODO(zhuohan): Use deque instead of list for better performance.
         # Sequence groups in the WAITING state.
@@ -186,6 +187,11 @@ class Scheduler:
                     self._swap_in_prefix(seq_group.prefix, blocks_to_swap_in)
                 # if the prefix hasn't been compuated, allocate blocks for it and set prefix.swap_to_gpu to True
                 self._allocate(seq_group)
+                # share block for father node in prefix_trie
+                if seq_group.prefix:
+                    # share blocks and free old blocks
+                    free_blocks_list = self.prefix_trie.update_block(seq_group.prefix)
+                    self.block_manager._free_block_table(free_blocks_list)
                 self.running.append(seq_group)
                 num_curr_seqs += num_new_seqs
                 scheduled.append(seq_group)

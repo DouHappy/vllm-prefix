@@ -1,5 +1,6 @@
 from sys import prefix
 from typing import Dict, List, Optional, Union
+from vllm.block import PhysicalTokenBlock
 
 # Define the prefix class, which is a collection of prefix (a sequence of tokens).
 # The class contains the following main methods:
@@ -49,7 +50,11 @@ class Prefix:
     
     def get_length(self):
         return self.length
-
+    
+    def __repr__(self) -> str:
+        return (f"prefix_id: {self.prefix_id}"
+               f"token_ids: {self.token_ids}"
+               f"block_table: {self.block_table}")
 
 # Define the prefix pool class, which is a collection of prefixes.
 # The class contains the following main methods:
@@ -109,3 +114,134 @@ class PrefixPool:
         del self.prefixes[prefix_id]
         
         return prefix_id
+
+    
+'''
+This class is the node for trie
+'''
+class TrieNode:
+    def __init__(self, value = None):
+        self.value: Optional[Prefix] = value
+        self.next_dict: Dict[int, TrieNode] = {}
+        self.size = 0 if value is None else 1
+
+'''
+Using Trie to auto-detect available prefix for prompt
+'''
+class PrefixTrie:
+    def __init__(self, block_size: int):
+        self.block_size = block_size
+        self.root = TrieNode()
+        self.prefixes_list = []
+        self.prefix_id = 0
+    
+    # add a new prefix
+    def add_prefix(self, token_ids: List[int]):
+        truncated_len = len(token_ids) // self.block_size * self.block_size
+        token_ids = token_ids[:truncated_len]
+        if self.match(token_ids) != None:
+            return
+        cur = self.root
+        cur.size += 1
+        for token in token_ids:
+            if token not in cur.next_dict:
+                cur.next_dict[token] = TrieNode()
+            
+            cur = cur.next_dict[token]
+            cur.size += 1
+        
+        cur.value = Prefix(self.prefix_id, token_ids, self.block_size)
+        self.prefixes_list.append(cur.value)
+        self.prefix_id += 1
+
+    def delete_prefix(self, token_ids: List[int]) -> Union[bool, int]:
+        # not in prefix_trie
+        if self.match(token_ids) == None:
+            return False
+        
+        truncated_len = len(token_ids) // self.block_size * self.block_size
+        token_ids = token_ids[:truncated_len]
+        cur = self.root
+        path_node: List[TrieNode] = [cur]
+        for token in token_ids:
+            if token in cur.next_dict:
+                cur = cur.next_dict[token]
+            else:
+                return False
+            path_node.append(cur)
+            
+        # remove from prefixes_list
+        self.prefixes_list.remove(path_node[-1].value)
+        # remove related node and key-value in dict
+        # blocks will be freed ouside here (in block_manager)
+        # can not call block_manager in PrefixTrie
+        father_id, son_id = len(path_node) - 2, len(path_node) - 1
+        deleted_id = path_node[-1].value.prefix_id
+        while father_id >= 0:
+            path_node[son_id].size -= 1
+            if path_node[son_id].size == 0:
+                path_node[father_id].next_dict.pop(token_ids[father_id])
+                del path_node[son_id]
+            father_id -= 1
+            son_id -= 1
+        self.root.size -= 1
+
+        return deleted_id
+
+    # find the longest cached prefix of specific token_ids 
+    def find_longest_prefix(self, token_ids: List[int]) -> Optional[Prefix]:
+        cur = self.root
+        res = None
+        for token in token_ids:
+            if token in cur.next_dict:
+                cur = cur.next_dict[token]
+                if cur.value != None:
+                    res = cur.value
+            else:
+               break
+        
+        return res
+    
+    # finding prefix has exactly specific token_ids
+    def match(self, token_ids: List[int]) -> Optional[Prefix]:
+        truncated_len = len(token_ids) // self.block_size * self.block_size
+        token_ids = token_ids[:truncated_len]
+        cur = self.root
+        for token in token_ids:
+            if token in cur.next_dict:
+                cur = cur.next_dict[token]
+            else:
+                return None
+        
+        return cur.value
+    
+    # using same physice block as many as possible
+    # update blocks from leaves to root
+    # return blocks need to be freed
+    def update_block(self, prefix: Prefix) -> List[PhysicalTokenBlock]:
+        free_blocks: List[PhysicalTokenBlock] = []
+        if not prefix.block_table:
+            # didn't allocated block, no need to update
+            return free_blocks
+        
+        cur = self.root
+        for token in prefix.token_ids:
+            assert token in cur.next_dict, f"prefix not found in prefix_trie.\n"\
+                                           f"prefix: {prefix.token_ids}"
+            cur = cur.next_dict[token]
+            if cur.value != None:
+                # free old block and replace by new block
+                if cur.value.block_table != None:
+                    free_blocks += cur.value.block_table
+                block_len = len(cur.value.token_ids) // self.block_size
+                cur.value.block_table = prefix.block_table[:block_len]
+                # update ref_count for each block
+                for block in cur.value.block_table:
+                    block.ref_count += 1
+        return free_blocks
+
+    def get_prefix_list(self) -> List[Prefix]:
+        return self.prefixes_list
+        
+               
+        

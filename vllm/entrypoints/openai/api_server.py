@@ -10,6 +10,8 @@ from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
 from copy import deepcopy
 
 import fastapi
+from networkx import prefix_tree
+
 import uvicorn
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -201,19 +203,47 @@ async def delete_prefix(request: ChatCompletionRequest) -> Response:
         JSONResponse({"response": "delete error"})
 
 @app.post("/schedule_prefix")
-async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
+async def schedule_prefix(request: SchedulePrefixRequest,
+                          raw_request: Request):
     logger.info(f"Received schedule prefix request: {request}")
     # sub_messages = request.sub_message
     # messages = request.messages_list
     prefix_groups:List[PrefixGroup] = []
     # count total number of request for each prefix
     messages_dict:Dict[str,List[Tuple[int, List]]] = {}
-    for ind, (message, sub_message) in enumerate(request.message_and_submessage):
-        str_sub_message = str(sub_message)
+    current_prefixes_token_list: List[List[int]] = []
+    prefix_trie = engine.engine.scheduler.prefix_trie
+    last_prefixes_list = deepcopy(prefix_trie.get_prefix_list())
+    for ind, (message, sub_message_list) in enumerate(
+        request.message_and_submessage):
+
+        # put them all in prefix_trie but share block
+        # block will be shared by prefix_trie.update_block()
+        if not isinstance(sub_message_list[0], list):
+            sub_message_list = [sub_message_list]
+        
+        logger.info(f"sub_message_list {sub_message_list}")
+        sub_message_list = list(reversed(sub_message_list))
+        for sub_message in sub_message_list:
+            # to using ready-made function,
+            # simply put sub_message in request's message
+            request.messages = sub_message
+            prefix = await get_gen_prompt(request)
+            prefix_tokens = tokenizer(prefix).input_ids
+            current_prefixes_token_list.append(prefix_tokens)
+            prefix_trie.add_prefix(prefix_tokens)
+
+        str_sub_message = str(sub_message_list[0])
         if str_sub_message in messages_dict:
             messages_dict[str_sub_message].append((ind, message))
         else:
             messages_dict[str_sub_message] = [(ind, message)]
+
+    # if prefix not used in current request list, we consider to delete.
+    for prefix in last_prefixes_list:
+        logger.info(f"delete prefix: {prefix}")
+        if prefix.token_ids not in current_prefixes_token_list:
+            engine.delete_prefix(prefix.token_ids)
 
     logger.info(f"messages_dict: {messages_dict}")
     response: SchedulePrefixResponse = SchedulePrefixResponse(outputs=[])
@@ -234,6 +264,7 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
             message_prompt = await get_gen_prompt(request)
             prompt_tokens = tokenizer(message_prompt).input_ids
             prompts_tokens_list.append(prompt_tokens)
+            
         prefix_groups.append(PrefixGroup(
             sub_message=sub_message,
             messages_list=messages_list,
@@ -246,10 +277,46 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
     logger.info(f"init prefix_group: {prefix_groups}")
     # sort by needed block number
     sorted(prefix_groups, key=lambda x:x.get_block_num(), reverse=True)
+    
+    async def batch_query(query_list: List[PrefixGroup],
+                          request: SchedulePrefixRequest,
+                          warmup=False):
+        var_dict = vars(request)
+        logger.info(f"at batch_query schedule prefix request: {request}")
+        # maybe message_and_submessage not in var_dict. Strange.
+        # Maybe some bugs i didn't noticed.
+        if 'message_and_submessage' in var_dict:
+            var_dict.pop('message_and_submessage')
+        request_temp = ChatCompletionRequest(**var_dict)
+        tasks = []
+        for query in query_list:
+            temp_request = deepcopy(request_temp)
+            # we don't need to generate anything here but max_token must > 0
+            if warmup:
+                temp_request.max_tokens = 1
+                temp_request.messages = query.sub_message
+                temp_request.prefix_pos = query.prefix_pos
+                task = asyncio.create_task(
+                    create_chat_completion(temp_request, raw_request)
+                    )
+                tasks.append(task)
+            else:
+                for message in query.messages_list:
+                    temp_request.messages = message
+                    temp_request.prefix_pos = query.prefix_pos
+                    task = asyncio.create_task(
+                        create_chat_completion(temp_request, raw_request)
+                        )
+                    tasks.append(task)
+        results = await asyncio.gather(*tasks)
+
+        return results
+
 
     while prefix_groups:
         query_list:List[PrefixGroup] = []
-        cur_free_block_num = engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()
+        cur_free_block_num = \
+            engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()
         for group in prefix_groups:
             if group.can_alloc(cur_free_block_num):
                 query_list.append(group)
@@ -257,41 +324,17 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
         
         if query_list == []:
             break
-        # warm up batch
-        var_dict = vars(request)
-        var_dict.pop('message_and_submessage')
-        request_temp = ChatCompletionRequest(**var_dict)
-        tasks = []
-        for query in query_list:
-            temp_request = deepcopy(request_temp)
-            temp_request.max_tokens = 1
-            temp_request.messages = query.sub_message
-            temp_request.prefix_pos = query.prefix_pos
-            task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
-            tasks.append(task)
-        results = await asyncio.gather(*tasks)
 
-        for result in results:
-            logger.info(f"warmup over: {result}")
-
-
+        # warmup batch
+        results = await batch_query(query_list, request, warmup=True)
         # query_batch
-        tasks = []
+        results = await batch_query(query_list, request, warmup=False)
         query_ids:List[int] = []
-        
-        request_temp = ChatCompletionRequest(**var_dict)
+
         for query in query_list:
             for ind, message in zip(query.query_ids, query.messages_list):
-                temp_request = deepcopy(request_temp)
-                temp_request.messages = message
-                temp_request.prefix_pos = query.prefix_pos
-                logger.info(f"new request: {temp_request}")
-                task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
-                tasks.append(task)
                 query_ids.append(ind)
 
-        logger.info(f"query batch query_ids: {query_ids}")
-        results = await asyncio.gather(*tasks)
         # handle output
         for result, ind in zip(results, query_ids):
             response.outputs[ind] = result
@@ -299,9 +342,10 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
             
         # delete_prefix
         for query in query_list:
+            logger.info(f"doing delete prefix: \n"
+                        f"prefix_tokens:{query.prefix_tokens}")
             prefix_groups.remove(query)
             engine.delete_prefix(query.prefix_tokens)
-            logger.info(f"delete prefix: {query.prefix_tokens}")
     
     # handle unable to warmup-batched query
             
@@ -309,6 +353,7 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
         tasks = []
         query_ids = []
         for query in prefix_groups:
+            results = await batch_query([query], request, warmup=True)
             var_dict = vars(request)
             var_dict.pop('message_and_submessage')
             request_temp = ChatCompletionRequest(**var_dict)
@@ -316,14 +361,15 @@ async def schedule_prefix(request: SchedulePrefixRequest, raw_request: Request):
                 temp_request = deepcopy(request_temp)
                 temp_request.messages = message
                 temp_request.prefix_pos = query.prefix_pos
-                task = asyncio.create_task(create_chat_completion(temp_request, raw_request))
+                task = asyncio.create_task(
+                    create_chat_completion(temp_request, raw_request)
+                    )
                 tasks.append(task)
                 query_ids.append(ind)
-        results = await asyncio.gather(*tasks)
-        logger.info(f"last batch query_ids: {query_ids}")
-        for ind, result in zip(query_ids, results):
-            response.outputs[ind] = result
-        # return output
+            results = await asyncio.gather(*tasks)
+            # logger.info(f"last batch query_ids: {query_ids}")
+            for ind, result in zip(query_ids, results):
+                response.outputs[ind] = result
     return response
 
 
@@ -361,7 +407,9 @@ async def create_chat_completion(request: ChatCompletionRequest,
             sub_request = deepcopy(request)
             sub_request.messages = sub_request.sub_message
             substr = await get_gen_prompt(sub_request)
-            substr_ids, error_check_ret = await check_length(request, prompt=substr)
+            substr_ids, error_check_ret = await check_length(request, 
+                                                             prompt=substr
+                                                             )
             if error_check_ret is not None:
                 return error_check_ret
             for i in range(0, min(len(substr_ids), len(token_ids))):
@@ -372,7 +420,8 @@ async def create_chat_completion(request: ChatCompletionRequest,
                     prefix_pos = i + 1
 
             if prefix_pos == 0:
-                logger.info(f"prefix is too short to fill one physics block. So will not be cached")
+                logger.info(f"prefix is too short to fill one physics block."
+                            "So will not be cached")
                 prefix_pos = None
     
 

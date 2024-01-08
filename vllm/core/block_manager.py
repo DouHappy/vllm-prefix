@@ -1,10 +1,10 @@
 """A block manager that manages token blocks."""
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from vllm.block import PhysicalTokenBlock
 from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
 from vllm.utils import Device
-from vllm.prefix import PrefixPool, Prefix
+from vllm.prefix import PrefixPool, Prefix, PrefixTrie
 
 
 class BlockAllocator:
@@ -347,8 +347,8 @@ class BlockSpaceManager:
             else:
                 self.cpu_allocator.free(block)
 
-    def free_prefix(self, prefix:Prefix) -> None:
-        if prefix == None:
+    def free_prefix(self, prefix:Union[Prefix, None]) -> None:
+        if prefix == None or prefix.block_table == None:
             return
         self._free_block_table(prefix.block_table)
         
