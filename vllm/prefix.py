@@ -133,6 +133,9 @@ class TrieNode:
 Using Trie to auto-detect available prefix for prompt
 '''
 class PrefixTrie:
+    '''
+    Manage prefix by Trie
+    '''
     def __init__(self, block_size: int):
         self.block_size = block_size
         self.root = TrieNode()
@@ -141,6 +144,10 @@ class PrefixTrie:
     
     # add a new prefix
     def add_prefix(self, token_ids: List[int]):
+        '''
+        Input: tokens of prefix
+        Output: None
+        '''
         assert len(self.prefixes_list) == self.root.size, f"list length{len(self.prefixes_list)} != trie size{self.root.size}"
         
         truncated_len = len(token_ids) // self.block_size * self.block_size
@@ -162,6 +169,10 @@ class PrefixTrie:
         self.prefix_id += 1
 
     def delete_prefix(self, token_ids: List[int]) -> Union[bool, int]:
+        '''
+        Input: tokens of prefix
+        Output: None
+        '''
         # not in prefix_trie
         if len(token_ids) == 0:
             return False
@@ -207,6 +218,11 @@ class PrefixTrie:
 
     # find the longest cached prefix of specific token_ids 
     def find_longest_prefix(self, token_ids: List[int]) -> Optional[Prefix]:
+        '''
+        Input: tokens of prompt
+        Output: The prefix which has the longest prefix-tokens with given
+                or None if not exist.
+        '''
         cur = self.root
         res = None
         for token in token_ids:
@@ -221,6 +237,11 @@ class PrefixTrie:
     
     # finding prefix has exactly specific token_ids
     def match(self, token_ids: List[int]) -> Optional[Prefix]:
+        '''
+        Input: tokens of prefix
+        Output: The prefix which exactly match given tokens
+                or None if not exist
+        '''
         assert len(self.prefixes_list) == self.root.size, f"list length{len(self.prefixes_list)} != trie size{self.root.size}"
         truncated_len = len(token_ids) // self.block_size * self.block_size
         token_ids = token_ids[:truncated_len]
@@ -237,6 +258,11 @@ class PrefixTrie:
     # update blocks from leaves to root
     # return blocks need to be freed
     def _update_block(self, prefix: Prefix) -> List[PhysicalTokenBlock]:
+        '''
+        Share blocks of a prefix
+        Input: the prefix you want to share blocks
+        Output: The List of old blocks. We need to free them latter.
+        '''
         free_blocks: List[PhysicalTokenBlock] = []
         if not prefix.block_table:
             # didn't allocated block, no need to update
@@ -260,6 +286,11 @@ class PrefixTrie:
         return free_blocks
 
     def update_block(self) -> List[PhysicalTokenBlock]:
+        '''
+        Share blocks of prefixes on Trie.
+        Input: None
+        Output: The List of old blocks. We need to free them latter.
+        '''
         free_blocks: List[PhysicalTokenBlock] = []
         sorted_prefixes_list = sorted(self.prefixes_list, key=lambda x:len(x.token_ids))
         for prefix in sorted_prefixes_list:
@@ -268,6 +299,9 @@ class PrefixTrie:
         return free_blocks
 
     def get_prefix_list(self) -> List[Prefix]:
+        '''
+        Get prefixes we now have, may not cached.
+        '''
         return self.prefixes_list
         
                

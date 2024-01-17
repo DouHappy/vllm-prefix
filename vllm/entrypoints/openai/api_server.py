@@ -192,6 +192,17 @@ def create_logprobs(token_ids: List[int],
 
 @app.post("/delete_prefix/")
 async def delete_prefix(request: ChatCompletionRequest) -> Response:
+    '''
+    Deleting prefix.
+    Shared block won't be deleted until not refered by any.
+    TODO: A specifical class used to delete prefix.
+    TODO: support delete by tokens
+    Input:
+        model:
+        messages: The string of prefix you want to delete
+    Output:
+        {"response": "ok"} if successfully else {"response": "delete error"}
+    '''
     logger.info(f"Received prefix deletion request: {request}")
     prompt = await get_gen_prompt(request)
     prefix_tokens = tokenizer(prompt).input_ids
@@ -204,6 +215,21 @@ async def delete_prefix(request: ChatCompletionRequest) -> Response:
 @app.post("/schedule_prefix")
 async def schedule_prefix(request: SchedulePrefixRequest,
                           raw_request: Request):
+    '''
+    This function is used for schedule prefix.
+    support multi-prefix for one question.
+    Store all prefix you given but use the longest.
+    Share same physice block if prefix has same prefix-token.
+    Using PrefixTrie to preserve prefix
+
+    structure of request.message_and_submessage:
+        message_and_submessage: List[[message, sub_message]]
+            message: List[{'role': '','content': ''}]
+            sub_messages: List[message]
+
+    TODO: support either message or tokens
+    TODO: clean code
+    '''
     logger.info(f"free blocks number {engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()}")
     logger.info(f"Received schedule prefix request: {request}")
     warmup_time = 0
