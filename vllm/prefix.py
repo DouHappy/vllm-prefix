@@ -2,6 +2,9 @@ from sys import prefix
 from typing import Dict, List, Optional, Union
 from vllm.block import PhysicalTokenBlock
 
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 # Define the prefix class, which is a collection of prefix (a sequence of tokens).
 # The class contains the following main methods:
 # 1. A match method that checks if a prefix matches a given sequence of tokens.
@@ -17,6 +20,7 @@ class Prefix:
         self.length = len(token_ids)
         print("prefix length: ", self.length)
         print("block size: ", block_size)
+        print("prefix id: ", self.prefix_id)
         assert self.length % block_size == 0
         self.on_gpu = False
         self.on_cpu = False
@@ -52,9 +56,9 @@ class Prefix:
         return self.length
     
     def __repr__(self) -> str:
-        return (f"prefix_id: {self.prefix_id}"
-               f"token_ids: {self.token_ids}"
-               f"block_table: {self.block_table}")
+        return (f"prefix_id: {self.prefix_id}\n"
+               f"token_ids: {self.token_ids}\n"
+               f"block_table: {self.block_table}\n")
 
 # Define the prefix pool class, which is a collection of prefixes.
 # The class contains the following main methods:
@@ -137,6 +141,8 @@ class PrefixTrie:
     
     # add a new prefix
     def add_prefix(self, token_ids: List[int]):
+        assert len(self.prefixes_list) == self.root.size, f"list length{len(self.prefixes_list)} != trie size{self.root.size}"
+        
         truncated_len = len(token_ids) // self.block_size * self.block_size
         token_ids = token_ids[:truncated_len]
         if self.match(token_ids) != None:
@@ -152,15 +158,20 @@ class PrefixTrie:
         
         cur.value = Prefix(self.prefix_id, token_ids, self.block_size)
         self.prefixes_list.append(cur.value)
+        assert len(self.prefixes_list) == self.root.size, f"list length{len(self.prefixes_list)} != trie size{self.root.size}"
         self.prefix_id += 1
 
     def delete_prefix(self, token_ids: List[int]) -> Union[bool, int]:
         # not in prefix_trie
-        if self.match(token_ids) == None:
+        if len(token_ids) == 0:
             return False
-        
         truncated_len = len(token_ids) // self.block_size * self.block_size
         token_ids = token_ids[:truncated_len]
+        deleted_prefix = self.match(token_ids)
+        if deleted_prefix == None:
+            logger.warning(f"no matched prefix to delete")
+            return False
+
         cur = self.root
         path_node: List[TrieNode] = [cur]
         for token in token_ids:
@@ -171,22 +182,28 @@ class PrefixTrie:
             path_node.append(cur)
             
         # remove from prefixes_list
+        # delete value
+        
         self.prefixes_list.remove(path_node[-1].value)
+        path_node[-1].value = None
+
         # remove related node and key-value in dict
         # blocks will be freed ouside here (in block_manager)
         # can not call block_manager in PrefixTrie
         father_id, son_id = len(path_node) - 2, len(path_node) - 1
-        deleted_id = path_node[-1].value.prefix_id
+
         while father_id >= 0:
             path_node[son_id].size -= 1
+            # delete path if path is empty
             if path_node[son_id].size == 0:
                 path_node[father_id].next_dict.pop(token_ids[father_id])
-                del path_node[son_id]
+                
             father_id -= 1
             son_id -= 1
-        self.root.size -= 1
+        path_node[0].size -= 1
 
-        return deleted_id
+        assert self.match(token_ids) == None, f"not delete completly"
+        return deleted_prefix.prefix_id
 
     # find the longest cached prefix of specific token_ids 
     def find_longest_prefix(self, token_ids: List[int]) -> Optional[Prefix]:
@@ -204,6 +221,7 @@ class PrefixTrie:
     
     # finding prefix has exactly specific token_ids
     def match(self, token_ids: List[int]) -> Optional[Prefix]:
+        assert len(self.prefixes_list) == self.root.size, f"list length{len(self.prefixes_list)} != trie size{self.root.size}"
         truncated_len = len(token_ids) // self.block_size * self.block_size
         token_ids = token_ids[:truncated_len]
         cur = self.root
@@ -218,7 +236,7 @@ class PrefixTrie:
     # using same physice block as many as possible
     # update blocks from leaves to root
     # return blocks need to be freed
-    def update_block(self, prefix: Prefix) -> List[PhysicalTokenBlock]:
+    def _update_block(self, prefix: Prefix) -> List[PhysicalTokenBlock]:
         free_blocks: List[PhysicalTokenBlock] = []
         if not prefix.block_table:
             # didn't allocated block, no need to update
@@ -234,10 +252,19 @@ class PrefixTrie:
                 if cur.value.block_table != None:
                     free_blocks += cur.value.block_table
                 block_len = len(cur.value.token_ids) // self.block_size
+                assert len(cur.value.token_ids) % self.block_size == 0, f"len(cur.value.token_ids): {len(cur.value.token_ids)}"
                 cur.value.block_table = prefix.block_table[:block_len]
                 # update ref_count for each block
                 for block in cur.value.block_table:
                     block.ref_count += 1
+        return free_blocks
+
+    def update_block(self) -> List[PhysicalTokenBlock]:
+        free_blocks: List[PhysicalTokenBlock] = []
+        sorted_prefixes_list = sorted(self.prefixes_list, key=lambda x:len(x.token_ids))
+        for prefix in sorted_prefixes_list:
+            free_blocks += self._update_block(prefix)
+    
         return free_blocks
 
     def get_prefix_list(self) -> List[Prefix]:

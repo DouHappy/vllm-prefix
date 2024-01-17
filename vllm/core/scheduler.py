@@ -187,11 +187,6 @@ class Scheduler:
                     self._swap_in_prefix(seq_group.prefix, blocks_to_swap_in)
                 # if the prefix hasn't been compuated, allocate blocks for it and set prefix.swap_to_gpu to True
                 self._allocate(seq_group)
-                # share block for father node in prefix_trie
-                if seq_group.prefix:
-                    # share blocks and free old blocks
-                    free_blocks_list = self.prefix_trie.update_block(seq_group.prefix)
-                    self.block_manager._free_block_table(free_blocks_list)
                 self.running.append(seq_group)
                 num_curr_seqs += num_new_seqs
                 scheduled.append(seq_group)
@@ -278,6 +273,11 @@ class Scheduler:
             blocks_to_copy=blocks_to_copy,
             ignored_seq_groups=[],
         )
+        
+        # share block for father node in prefix_trie
+        free_blocks_list = self.prefix_trie.update_block()
+        self.block_manager._free_block_table(free_blocks_list)
+            
         return scheduler_outputs
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:

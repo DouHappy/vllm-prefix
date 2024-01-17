@@ -1,9 +1,12 @@
 from typing import List, Dict, Optional
 
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 class PrefixGroup:
     prefix_tokens:List[int]
     prompts_tokens_list:List[List[int]]
-    block_num:int = 0
+    block_num:Optional[int] = None
     query_ids:List[int]
     prefix_pos:Optional[int] = None
     def __init__(self, sub_message, messages_list, block_size, prefix_tokens, prompts_tokens_list, query_ids):
@@ -38,12 +41,19 @@ class PrefixGroup:
             return self.block_num
         prefix_block_num = len(self.prefix_tokens) // self.block_size
         total_block_num = sum([(len(x) + self.block_size - 1) // self.block_size for x in self.prompts_tokens_list])
-        self.block_num = total_block_num - prefix_block_num * (len(self.messages_list - 1))
+        self.block_num = total_block_num - prefix_block_num * (len(self.prompts_tokens_list) - 1)
+        # debuge info
+        logger.info(f"prefix_block_num: {prefix_block_num}\n"
+                    f"total_block_num: {total_block_num}\n"
+                    f"self.block_num: {self.block_num}\n")
         return self.block_num
 
     def can_alloc(self, free_block_num)->bool:
         # currently we only consider the block number limitation
-        return free_block_num - self.get_block_num() >= free_block_num * 0.1
+        logger.info(f"need {self.get_block_num()} "
+                    f"have {free_block_num} "
+                    f"{'yes' if free_block_num - self.get_block_num() >= 15 else 'no'}")
+        return free_block_num - self.get_block_num() >= 15
     
     def __repr__(self) -> str:
         res_list = []
