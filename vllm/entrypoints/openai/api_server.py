@@ -317,8 +317,8 @@ async def schedule_prefix(request: SchedulePrefixRequest,
         logger.info(f"free blocks number {engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()}")
         var_dict = vars(request)
         # logger.info(f"at batch_query schedule prefix request: {request}")
-        # maybe message_and_submessage not in var_dict. Strange.
-        # Maybe some bugs i didn't noticed.
+        # maybe message_and_submessage not in var_dict.
+        # poped in the first batch_query, will also not exist in request
         if 'message_and_submessage' in var_dict:
             var_dict.pop('message_and_submessage')
         request_temp = ChatCompletionRequest(**var_dict)
@@ -404,7 +404,9 @@ async def schedule_prefix(request: SchedulePrefixRequest,
             warmup_time += end_t2 - end_t1
 
             var_dict = vars(request)
-            var_dict.pop('message_and_submessage')
+            if 'message_and_submessage' in var_dict:
+                var_dict.pop('message_and_submessage')
+
             request_temp = ChatCompletionRequest(**var_dict)
             for ind, message in zip(query.query_ids, query.messages_list):
                 temp_request = deepcopy(request_temp)
