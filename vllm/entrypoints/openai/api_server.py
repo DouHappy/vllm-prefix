@@ -212,8 +212,29 @@ async def delete_prefix(request: ChatCompletionRequest) -> Response:
     else:
         JSONResponse({"response": "delete error"})
 
+SEMAPHORE = asyncio.Semaphore(1)
 @app.post("/schedule_prefix")
 async def schedule_prefix(request: SchedulePrefixRequest,
+                          raw_request: Request):
+    '''
+    This function is used for queuing for _schedule_prefix.
+    _schedule_prefix should be available once by a process
+
+    structure of request.message_and_submessage:
+        message_and_submessage: List[[message, sub_message]]
+            message: List[{'role': '','content': ''}]
+            sub_messages: List[message]
+    
+    TODO: seperate by sampling paramters
+    '''
+    global SEMAPHORE
+    async with SEMAPHORE:
+        return await _schedule_prefix(request, raw_request)
+
+
+
+# @app.post("/schedule_prefix")
+async def _schedule_prefix(request: SchedulePrefixRequest,
                           raw_request: Request):
     '''
     This function is used for schedule prefix.
@@ -231,7 +252,7 @@ async def schedule_prefix(request: SchedulePrefixRequest,
     TODO: clean code
     '''
     logger.info(f"free blocks number {engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()}")
-    logger.info(f"Received schedule prefix request: {request}")
+    logger.info(f"Received _schedule_prefix request: {request}")
     warmup_time = 0
     query_time = 0
     start_t = time.monotonic()
@@ -244,9 +265,9 @@ async def schedule_prefix(request: SchedulePrefixRequest,
     current_prefixes_token_list: List[List[int]] = []
     prefix_trie = engine.engine.scheduler.prefix_trie
     logger.info(f"prefix_tree's size {prefix_trie.root.size}. as follow:")
-    last_prefixes_list = deepcopy(prefix_trie.get_prefix_list())
-    for prefix in last_prefixes_list:
-        logger.info(f"{prefix}\n")
+    # last_prefixes_list = deepcopy(prefix_trie.get_prefix_list())
+    # for prefix in last_prefixes_list:
+    #     logger.info(f"{prefix}\n")
     for ind, (message, sub_message_list) in enumerate(
         request.message_and_submessage):
 
@@ -274,10 +295,12 @@ async def schedule_prefix(request: SchedulePrefixRequest,
         else:
             messages_dict[str_sub_message] = [(ind, message)]
 
-    # if prefix not used in current request list, we consider to delete.
-    for prefix in last_prefixes_list:
-        if prefix.token_ids not in current_prefixes_token_list:
-            engine.delete_prefix(prefix.token_ids)
+    # because multi process are requseting at the same time.
+    # there should be deleted
+    # # if prefix not used in current request list, we consider to delete.
+    # for prefix in last_prefixes_list:
+    #     if prefix.token_ids not in current_prefixes_token_list:
+    #         engine.delete_prefix(prefix.token_ids)
 
     response: SchedulePrefixResponse = SchedulePrefixResponse(outputs=[])
     response.outputs = [None] * len(request.message_and_submessage)
@@ -422,10 +445,11 @@ async def schedule_prefix(request: SchedulePrefixRequest,
             results = await asyncio.gather(*tasks)
             end_t2 = time.monotonic()
             query_time += end_t2 - end_t1
-            
-            # logger.info(f"last batch query_ids: {query_ids}")
             for ind, result in zip(query_ids, results):
                 response.outputs[ind] = result
+            # delete prefix
+            engine.delete_prefix(query.prefix_tokens)
+            logger.info(f"after free,free blocks number {engine.engine.scheduler.block_manager.get_num_free_gpu_blocks()}")
     
     end_t = time.monotonic()
     logger.info(f"total time: {end_t - start_t}"
