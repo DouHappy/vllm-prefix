@@ -347,22 +347,23 @@ async def _schedule_prefix(request: SchedulePrefixRequest,
         request_temp = ChatCompletionRequest(**var_dict)
         tasks = []
         for query in query_list:
-            temp_request = deepcopy(request_temp)
+            request_copy = deepcopy(request_temp)
             # we don't need to generate anything here but max_token must > 0
             if warmup:
-                temp_request.max_tokens = 1
-                temp_request.messages = query.sub_message
-                temp_request.prefix_pos = query.prefix_pos
+                request_copy.max_tokens = 1
+                request_copy.messages = query.sub_message
+                request_copy.prefix_pos = query.prefix_pos
                 task = asyncio.create_task(
-                    create_chat_completion(temp_request, raw_request)
+                    create_chat_completion(request_copy, raw_request)
                     )
                 tasks.append(task)
             else:
                 for message in query.messages_list:
-                    temp_request.messages = message
-                    temp_request.prefix_pos = query.prefix_pos
+                    request_copy = deepcopy(request_temp)
+                    request_copy.messages = message
+                    request_copy.prefix_pos = query.prefix_pos
                     task = asyncio.create_task(
-                        create_chat_completion(temp_request, raw_request)
+                        create_chat_completion(request_copy, raw_request)
                         )
                     tasks.append(task)
         results = await asyncio.gather(*tasks)
