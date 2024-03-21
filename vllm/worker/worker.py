@@ -193,7 +193,7 @@ class Worker:
 
             if sampling_params.prompt_logprobs is not None:
                 # NOTE: prompt token positions do not need sample, skip
-                categorized_sample_indices_start_idx += prompt_len - 1
+                categorized_sample_indices_start_idx += prompt_len - prefix_len - 1
 
             categorized_sample_indices[sampling_params.sampling_type].append(
                 categorized_sample_indices_start_idx)
