@@ -539,6 +539,7 @@ async def create_chat_completion(request: ChatCompletionRequest,
             use_beam_search=request.use_beam_search,
             skip_special_tokens=request.skip_special_tokens,
             spaces_between_special_tokens=spaces_between_special_tokens,
+            logprobs=request.logprobs,
         )
     except ValueError as e:
         return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
@@ -624,6 +625,7 @@ async def create_chat_completion(request: ChatCompletionRequest,
             index=output.index,
             message=ChatMessage(role="assistant", content=output.text),
             finish_reason=output.finish_reason,
+            logprobs=str(output.logprobs),
         )
         choices.append(choice_data)
 
@@ -749,11 +751,12 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
 
     if use_token_ids:
         result_generator = engine.generate(None,
+                                           None, 
                                            sampling_params,
                                            request_id,
                                            prompt_token_ids=prompt)
     else:
-        result_generator = engine.generate(prompt, sampling_params, request_id,
+        result_generator = engine.generate(prompt, None, sampling_params, request_id,
                                            token_ids)
 
     # Similar to the OpenAI API, when n != best_of, we do not stream the

@@ -75,6 +75,7 @@ class ChatCompletionRequest(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     prefix_pos: Optional[int] = None
     sub_message: Optional[Union[str, List[Dict[str, str]]]] = None
+    logprobs: Optional[int] = None
 
 class SchedulePrefixRequest(BaseModel):
     model: str
@@ -98,6 +99,7 @@ class SchedulePrefixRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
     message_and_submessage: List[List[Any]]
+    logprobs: Optional[int] = None
     # messages_list: List[List[Dict[str, str]]]
     # sub_message: List[List[Dict[str, str]]]
 
@@ -179,6 +181,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     finish_reason: Optional[Literal["stop", "length"]] = None
+    logprobs: Optional[Any] = None
 
 
 class ChatCompletionResponse(BaseModel):

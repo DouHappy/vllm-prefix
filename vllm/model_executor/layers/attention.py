@@ -137,9 +137,24 @@ class PagedAttention(nn.Module):
 
         if self.num_kv_heads != self.num_heads:
             # Project the key and value tensors to the desired number of heads.
-            key = torch.repeat_interleave(key, self.num_queries_per_kv, dim=1)
-            value = torch.repeat_interleave(value, self.num_queries_per_kv,dim=1)
+            # key = torch.repeat_interleave(key, self.num_queries_per_kv, dim=1)
+            # value = torch.repeat_interleave(value, self.num_queries_per_kv,dim=1)
+            print(f"using MGH")
+            query = query.view(query.shape[0], self.num_kv_heads,
+                                       self.num_queries_per_kv,
+                                       query.shape[-1])
+            key = key[:, :,
+                        None, :].expand(key.shape[0], self.num_kv_heads,
+                                        self.num_queries_per_kv,
+                                        key.shape[-1])
+            value = value[:, :,
+                            None, :].expand(value.shape[0],
+                                            self.num_kv_heads,
+                                            self.num_queries_per_kv,
+                                            value.shape[-1])
         
+        
+
         context_attention_fwd(
                 query,
                 key,
@@ -324,10 +339,10 @@ class PagedAttention(nn.Module):
             key_to_cache = key
             value_to_cache = value
             slot_mapping = input_metadata.slot_mapping.view(-1)
-            if input_metadata.to_cache is not None:
-                key_to_cache = key_to_cache[input_metadata.to_cache]
-                value_to_cache = value_to_cache[input_metadata.to_cache]
-                slot_mapping = slot_mapping[input_metadata.to_cache]
+            # if input_metadata.to_cache is not None:
+            #     key_to_cache = key_to_cache[input_metadata.to_cache]
+            #     value_to_cache = value_to_cache[input_metadata.to_cache]
+            #     slot_mapping = slot_mapping[input_metadata.to_cache]
 
             cache_ops.reshape_and_cache(
                 key_to_cache,

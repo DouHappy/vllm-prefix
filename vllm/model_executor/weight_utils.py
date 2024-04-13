@@ -304,6 +304,11 @@ def load_tensor_parallel_weights(
         f"{param.shape} != {loaded_weight.shape}")
     param.data.copy_(loaded_weight)
 
+def default_weight_loader(param: torch.Tensor,
+                          loaded_weight: torch.Tensor) -> None:
+    """Default weight loader."""
+    assert param.size() == loaded_weight.size()
+    param.data.copy_(loaded_weight)
 
 def initialize_dummy_weights(
     model: torch.nn.Module,
