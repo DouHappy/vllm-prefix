@@ -10,6 +10,7 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.sampling_params import SamplingParams
 from vllm.utils import random_uuid
+from vllm.transformers_utils.tokenizer import get_tokenizer
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 TIMEOUT_TO_PREVENT_DEADLOCK = 1  # seconds.
@@ -69,6 +70,26 @@ async def generate(request: Request) -> Response:
     ret = {"text": text_outputs}
     return JSONResponse(ret)
 
+@app.post("/delete_prefix/")
+async def delete_prefix(request: Request) -> Response:
+    '''
+    Deleting prefix.
+    Shared block won't be deleted until not refered by any.
+    TODO: A specifical class used to delete prefix.
+    TODO: support delete by tokens
+    Input:
+        model:
+        messages: The string of prefix you want to delete
+    Output:
+        {"response": "ok"} if successfully else {"response": "delete error"}
+    '''
+    request_dict = await request.json()
+    prefix = request_dict.pop("prefix")
+    prefix_tokens = tokenizer(prefix).input_ids
+    if engine.delete_prefix(prefix_tokens) != None:
+        JSONResponse({"response": "ok"})
+    else:
+        JSONResponse({"response": "delete error"})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -80,6 +101,11 @@ if __name__ == "__main__":
     engine_args = AsyncEngineArgs.from_cli_args(args)
     engine = AsyncLLMEngine.from_engine_args(engine_args)
 
+        # A separate tokenizer to map token IDs to strings.
+    tokenizer = get_tokenizer(engine_args.tokenizer,
+                              tokenizer_mode=engine_args.tokenizer_mode,
+                              trust_remote_code=engine_args.trust_remote_code)
+    
     uvicorn.run(app,
                 host=args.host,
                 port=args.port,
