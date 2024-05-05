@@ -625,7 +625,7 @@ async def create_chat_completion(request: ChatCompletionRequest,
             index=output.index,
             message=ChatMessage(role="assistant", content=output.text),
             finish_reason=output.finish_reason,
-            logprobs=str(output.logprobs),
+            logprobs=output.logprobs,
         )
         choices.append(choice_data)
 

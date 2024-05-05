@@ -132,10 +132,9 @@ def _get_penalties(
             # NOTE: We do not apply presence and frequency penalties for the
             # prompt token positions where we don't sample new tokens.
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
-            presence_penalties += [0] * (prompt_len - context_len - 1)
-            frequency_penalties += [0] * (prompt_len - context_len - 1)
-            repetition_penalties += [1] * (prompt_len - context_len - 1)
+            presence_penalties += [0] * (prompt_len - 1)
+            frequency_penalties += [0] * (prompt_len - 1)
+            repetition_penalties += [1] * (prompt_len - 1)
         presence_penalties += [p] * len(seq_ids)
         frequency_penalties += [f] * len(seq_ids)
         repetition_penalties += [r] * len(seq_ids)
@@ -151,8 +150,7 @@ def _get_output_tokens(input_metadata: InputMetadata) -> List[List[int]]:
             # NOTE: prompt token positions do not need output tokens to
             # compute penalties.
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
-            output_tokens.extend([] for _ in range(prompt_len - context_len - 1))
+            output_tokens.extend([] for _ in range(prompt_len - 1))
         for seq_id in seq_ids:
             seq_data = input_metadata.seq_data[seq_id]
             output_tokens.append(seq_data.output_token_ids)
@@ -258,8 +256,7 @@ def _get_temperatures(input_metadata: InputMetadata) -> List[float]:
         if (i < input_metadata.num_prompts
                 and sampling_params.prompt_logprobs is not None):
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
-            temperatures += [temperature] * (prompt_len - context_len - 1)
+            temperatures += [temperature] * (prompt_len - 1)
         temperatures += [temperature] * len(seq_ids)
     return temperatures
 
@@ -280,9 +277,8 @@ def _get_top_p_top_k(
         if (i < input_metadata.num_prompts
                 and sampling_params.prompt_logprobs is not None):
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
-            top_ps += [top_p] * (prompt_len - context_len - 1)
-            top_ks += [top_k] * (prompt_len - context_len - 1)
+            top_ps += [top_p] * (prompt_len - 1)
+            top_ks += [top_k] * (prompt_len - 1)
         top_ps += [top_p] * len(seq_ids)
         top_ks += [top_k] * len(seq_ids)
     return top_ps, top_ks
@@ -491,14 +487,13 @@ def _get_logprobs(
             largest_num_logprobs = max(largest_num_logprobs,
                                        sampling_params.prompt_logprobs)
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
             prompt_tokens = input_metadata.seq_data[
                 seq_ids[0]].prompt_token_ids
             batched_logprobs_query_seq_indices.extend(
-                sample_idx + j for j in range(prompt_len - context_len - 1))
+                sample_idx + j for j in range(prompt_len - 1))
             batched_logprobs_query_token_indices.extend(
-                token_id for token_id in prompt_tokens[1 + context_len:])
-            sample_idx += prompt_len - context_len - 1
+                token_id for token_id in prompt_tokens[1:])
+            sample_idx += prompt_len - 1
         batched_logprobs_query_seq_indices.extend(
             [sample_idx + parent_id for parent_id in parent_ids])
         batched_logprobs_query_token_indices.extend(next_token_ids)
@@ -539,11 +534,10 @@ def _get_logprobs(
                 and sampling_params.prompt_logprobs is not None):
             num_logprobs = sampling_params.prompt_logprobs
             prompt_len = input_metadata.prompt_lens[i]
-            context_len = input_metadata.context_lens[i]
             prompt_tokens = input_metadata.seq_data[
                 seq_ids[0]].prompt_token_ids
             group_prompt_logprobs: PromptLogprobs = [None]
-            for token_id in prompt_tokens[1 + context_len:]:
+            for token_id in prompt_tokens[1:]:
                 prompt_logprobs_dict = {
                     token_id:
                     batched_logprobs_query_result[query_result_idx].item()
